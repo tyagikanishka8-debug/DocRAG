@@ -3,10 +3,17 @@ import pytesseract
 from PIL import Image
 from docx import Document
 
-from text_cleaner import clean_text
+from chunker import chunk_pages
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# Tell pytesseract where Tesseract is installed
+pytesseract.pytesseract.tesseract_cmd = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+)
 
+
+# -----------------------------------
+# PDF TEXT EXTRACTION
+# -----------------------------------
 
 def extract_text_from_pdf(file_path):
     document = pymupdf.open(file_path)
@@ -21,6 +28,32 @@ def extract_text_from_pdf(file_path):
     return text
 
 
+# -----------------------------------
+# PDF PAGE EXTRACTION
+# -----------------------------------
+
+def extract_pages_from_pdf(file_path):
+    document = pymupdf.open(file_path)
+
+    pages = []
+
+    for page_number, page in enumerate(document):
+        text = page.get_text()
+
+        pages.append({
+            "text": text,
+            "page": page_number + 1
+        })
+
+    document.close()
+
+    return pages
+
+
+# -----------------------------------
+# DOCX TEXT EXTRACTION
+# -----------------------------------
+
 def extract_text_from_docx(file_path):
     document = Document(file_path)
 
@@ -31,6 +64,10 @@ def extract_text_from_docx(file_path):
 
     return text
 
+
+# -----------------------------------
+# OCR EXTRACTION
+# -----------------------------------
 
 def extract_text_with_ocr(file_path):
     document = pymupdf.open(file_path)
@@ -53,6 +90,11 @@ def extract_text_with_ocr(file_path):
 
     return text
 
+
+# -----------------------------------
+# AUTOMATIC PDF EXTRACTION
+# -----------------------------------
+
 def extract_text_from_pdf_auto(file_path):
     text = extract_text_from_pdf(file_path)
 
@@ -60,22 +102,26 @@ def extract_text_from_pdf_auto(file_path):
         return text
 
     print("Very little text found. Using OCR...")
+
     return extract_text_with_ocr(file_path)
 
 
+# -----------------------------------
+# TEST THE COMPLETE PIPELINE
+# -----------------------------------
+
 if __name__ == "__main__":
-    pdf_text = extract_text_from_pdf("uploads/sample.pdf")
-    print("PDF TEXT:")
-    print(pdf_text)
 
-    docx_text = extract_text_from_docx("uploads/sample.docx")
-    print("\nDOCX TEXT:")
-    print(docx_text)
+    # Extract pages from the PDF
+    pages = extract_pages_from_pdf("uploads/sample.pdf")
 
-    auto_text = extract_text_from_pdf_auto("uploads/sample.pdf")
-    print("\nAUTO PDF TEXT:")
-    print(auto_text)
+    # Create chunks while keeping page numbers
+    pdf_chunks = chunk_pages(pages)
 
-    cleaned_pdf_text = clean_text(pdf_text)
-    print("\nCLEANED PDF TEXT:")
-    print(cleaned_pdf_text)
+    # Display the first 10 chunks
+    print("\nPDF CHUNKS:")
+
+    for i, chunk in enumerate(pdf_chunks[:10]):
+        print(f"\nChunk {i + 1}")
+        print(f"Page: {chunk['page']}")
+        print(f"Text: {chunk['text'][:200]}")
