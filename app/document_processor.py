@@ -2,6 +2,9 @@ import pymupdf
 import pytesseract
 from PIL import Image
 from docx import Document
+
+from text_cleaner import clean_text
+
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 
@@ -72,4 +75,7 @@ if __name__ == "__main__":
     auto_text = extract_text_from_pdf_auto("uploads/sample.pdf")
     print("\nAUTO PDF TEXT:")
     print(auto_text)
-    
+
+    cleaned_pdf_text = clean_text(pdf_text)
+    print("\nCLEANED PDF TEXT:")
+    print(cleaned_pdf_text)
