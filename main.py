@@ -1,1 +1,0 @@
-print("DocRAG is starting")
