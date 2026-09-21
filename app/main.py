@@ -27,11 +27,31 @@ app = FastAPI(
 )
 
 
+# -----------------------------------
+# CORS
+# -----------------------------------
+
+# During deployment, the frontend URL will be added
+# through the FRONTEND_URL environment variable.
+#
+# Local development continues to work with Vite.
+
+frontend_url = os.getenv(
+    "FRONTEND_URL",
+    "http://localhost:5173"
+)
+
+allowed_origins = [
+    "http://localhost:5173"
+]
+
+if frontend_url and frontend_url not in allowed_origins:
+    allowed_origins.append(frontend_url)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -78,6 +98,19 @@ def home():
 
 
 # -----------------------------------
+# HEALTH CHECK
+# -----------------------------------
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "healthy",
+        "service": "DocRAG API"
+    }
+
+
+# -----------------------------------
 # ASK QUESTION
 # -----------------------------------
 
@@ -111,9 +144,7 @@ def process_document(
     filename
 ):
 
-    processing_status[filename] = (
-        "processing"
-    )
+    processing_status[filename] = "processing"
 
     try:
 
@@ -126,9 +157,7 @@ def process_document(
             file_path
         )
 
-        processing_status[filename] = (
-            "completed"
-        )
+        processing_status[filename] = "completed"
 
         print(
             "\nBackground processing completed:"
@@ -138,9 +167,7 @@ def process_document(
 
     except Exception as error:
 
-        processing_status[filename] = (
-            "failed"
-        )
+        processing_status[filename] = "failed"
 
         print(
             "\nBackground processing failed:"
@@ -214,9 +241,7 @@ async def upload_document(
             "status": "exists"
         }
 
-    processing_status[filename] = (
-        "processing"
-    )
+    processing_status[filename] = "processing"
 
     background_tasks.add_task(
         process_document,
