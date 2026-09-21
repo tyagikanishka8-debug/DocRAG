@@ -1,427 +1,370 @@
+
 import os
+import shutil
+from pathlib import Path
 
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    File,
-    HTTPException,
-    BackgroundTasks
-)
-
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-
 from pydantic import BaseModel
 
+from app.document_processor import process_document
 from app.rag_pipeline import ask_question
-
 from app.vector_store import (
+    collection,
+    delete_document as remove_document_from_store,
+    document_exists,
     store_document_chunks,
-    collection
 )
 
+load_dotenv()
 
-app = FastAPI(
-    title="DocRAG API",
-    description="AI-powered document question answering system",
-    version="1.0.0"
-)
+app = FastAPI(title="DocRAG API")
 
-
-# -----------------------------------
-# CORS
-# -----------------------------------
-
-# During deployment, the frontend URL will be added
-# through the FRONTEND_URL environment variable.
-#
-# Local development continues to work with Vite.
-
-frontend_url = os.getenv(
+FRONTEND_URL = os.getenv(
     "FRONTEND_URL",
-    "http://localhost:5173"
+    "http://localhost:5173",
 )
-
-allowed_origins = [
-    "http://localhost:5173"
-]
-
-if frontend_url and frontend_url not in allowed_origins:
-    allowed_origins.append(frontend_url)
-
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=[
+        FRONTEND_URL,
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
-
-# -----------------------------------
-# REQUEST MODELS
-# -----------------------------------
-
-class ChatMessage(BaseModel):
-
-    role: str
-
-    content: str
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
 
 class QuestionRequest(BaseModel):
-
     question: str
-
-    source: str | None = None
-
-    conversation_history: list[ChatMessage] = []
+    source: str = "all"
+    conversation_history: list = []
 
 
-# -----------------------------------
-# PROCESSING STATUS
-# -----------------------------------
+def process_uploaded_document(file_path: str, filename: str):
+    """
+    Background document processing.
 
-processing_status = {}
+    Extracts the document, creates chunks, generates embeddings,
+    and stores everything in ChromaDB.
+    """
+    try:
+        print(f"Starting background processing: {file_path}")
 
+        result = process_document(file_path)
 
-# -----------------------------------
-# HOME
-# -----------------------------------
+        if isinstance(result, dict):
+            status = result.get("status")
+            pages = result.get("pages", 0)
+            chunks = result.get("chunks", 0)
+
+            if status == "error":
+                print(f"Background processing failed: {result}")
+                return result
+
+        else:
+            pages = 0
+            chunks = 0
+
+        store_result = store_document_chunks(
+            file_path,
+            filename=filename,
+        )
+
+        print(
+            "Background processing completed:",
+            {
+                "status": "success",
+                "filename": filename,
+                "pages": pages,
+                "chunks": chunks,
+            },
+        )
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "pages": pages,
+            "chunks": chunks,
+            "store_result": store_result,
+        }
+
+    except Exception as exc:
+        print(
+            f"Background processing failed for {filename}: {exc}"
+        )
+
+        return {
+            "status": "failed",
+            "filename": filename,
+            "error": str(exc),
+        }
+
 
 @app.get("/")
-def home():
-
+def root():
     return {
-        "message": "DocRAG API is running!"
+        "message": "DocRAG API is running",
+        "status": "healthy",
     }
 
-
-# -----------------------------------
-# HEALTH CHECK
-# -----------------------------------
 
 @app.get("/health")
 def health():
-
     return {
         "status": "healthy",
-        "service": "DocRAG API"
     }
 
-
-# -----------------------------------
-# ASK QUESTION
-# -----------------------------------
-
-@app.post("/ask")
-def ask(request: QuestionRequest):
-
-    conversation_history = [
-        message.model_dump()
-        for message in request.conversation_history
-    ]
-
-    answer, sources = ask_question(
-        request.question,
-        source=request.source,
-        conversation_history=conversation_history
-    )
-
-    return {
-        "question": request.question,
-        "answer": answer,
-        "sources": sources
-    }
-
-
-# -----------------------------------
-# BACKGROUND PROCESSING
-# -----------------------------------
-
-def process_document(
-    file_path,
-    filename
-):
-
-    processing_status[filename] = "processing"
-
-    try:
-
-        print(
-            f"\nStarting background processing: "
-            f"{file_path}"
-        )
-
-        result = store_document_chunks(
-            file_path
-        )
-
-        processing_status[filename] = "completed"
-
-        print(
-            "\nBackground processing completed:"
-        )
-
-        print(result)
-
-    except Exception as error:
-
-        processing_status[filename] = "failed"
-
-        print(
-            "\nBackground processing failed:"
-        )
-
-        print(error)
-
-
-# -----------------------------------
-# UPLOAD DOCUMENT
-# -----------------------------------
 
 @app.post("/upload")
 async def upload_document(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
+    filename = file.filename
 
-    allowed_extensions = (
-        ".pdf",
-        ".docx"
-    )
-
-    filename = file.filename or ""
-
-    if not filename.lower().endswith(
-        allowed_extensions
-    ):
-
+    if not filename:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Only PDF and DOCX files "
-                "are supported."
-            )
+            detail="Filename is required.",
         )
 
-    os.makedirs(
-        "uploads",
-        exist_ok=True
-    )
+    extension = Path(filename).suffix.lower()
 
-    file_path = os.path.join(
-        "uploads",
-        filename
-    )
+    if extension not in [".pdf", ".docx"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF and DOCX files are supported.",
+        )
 
-    contents = await file.read()
+    if document_exists(filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{filename} already exists in the document library.",
+        )
 
-    with open(
-        file_path,
-        "wb"
-    ) as f:
+    file_path = UPLOAD_DIR / filename
 
-        f.write(contents)
+    try:
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-    existing_documents = collection.get(
-        where={
-            "source": filename
-        },
-        limit=1
-    )
-
-    if existing_documents["ids"]:
-
-        return {
-            "message": (
-                "This document is already uploaded."
-            ),
-            "filename": filename,
-            "status": "exists"
-        }
-
-    processing_status[filename] = "processing"
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save uploaded file: {exc}",
+        )
 
     background_tasks.add_task(
-        process_document,
-        file_path,
-        filename
+        process_uploaded_document,
+        str(file_path),
+        filename,
     )
 
     return {
-        "message": (
-            "File uploaded successfully. "
-            "Processing started in the background."
-        ),
+        "status": "processing",
         "filename": filename,
-        "status": "processing"
+        "message": "Document uploaded successfully and processing has started.",
     }
 
-
-# -----------------------------------
-# GET DOCUMENTS
-# -----------------------------------
 
 @app.get("/documents")
 def get_documents():
+    try:
+        results = collection.get(include=["metadatas"])
 
-    results = collection.get(
-        include=["metadatas"]
-    )
+        documents = {}
 
-    documents = {}
+        metadatas = results.get("metadatas", []) or []
 
-    for metadata in results["metadatas"]:
+        for metadata in metadatas:
+            if not metadata:
+                continue
 
-        source = metadata.get(
-            "source"
+            source = metadata.get("source") or metadata.get("filename")
+
+            if not source:
+                continue
+
+            if source not in documents:
+                documents[source] = {
+                    "filename": source,
+                    "file_type": metadata.get(
+                        "file_type",
+                        Path(source).suffix,
+                    ),
+                    "pages": set(),
+                    "chunks": 0,
+                    "uploaded_at": metadata.get(
+                        "uploaded_at",
+                        "",
+                    ),
+                }
+
+            page = metadata.get("page")
+
+            if page is not None:
+                documents[source]["pages"].add(page)
+
+            documents[source]["chunks"] += 1
+
+        formatted_documents = []
+
+        for document in documents.values():
+            document["pages"] = len(document["pages"])
+
+            formatted_documents.append(document)
+
+        formatted_documents.sort(
+            key=lambda item: item.get("uploaded_at", ""),
+            reverse=True,
         )
 
-        if not source:
-            continue
-
-        if source not in documents:
-
-            documents[source] = {
-
-                "filename": source,
-
-                "file_type": metadata.get(
-                    "file_type",
-                    "unknown"
-                ),
-
-                "pages": set(),
-
-                "chunks": 0,
-
-                "uploaded_at": metadata.get(
-                    "uploaded_at",
-                    "Unknown"
-                )
-            }
-
-        page = metadata.get(
-            "page"
-        )
-
-        if page is not None:
-
-            documents[source]["pages"].add(
-                page
-            )
-
-        documents[source]["chunks"] += 1
-
-    document_list = []
-
-    for document in documents.values():
-
-        document["pages"] = len(
-            document["pages"]
-        )
-
-        document_list.append(
-            document
-        )
-
-    return {
-        "documents": document_list
-    }
-
-
-# -----------------------------------
-# DELETE DOCUMENT
-# -----------------------------------
-
-@app.delete(
-    "/documents/{filename}"
-)
-def delete_document(
-    filename: str
-):
-
-    results = collection.get(
-        where={
-            "source": filename
+        return {
+            "documents": formatted_documents,
         }
-    )
 
-    document_ids = results["ids"]
-
-    if not document_ids:
+    except Exception as exc:
+        print(f"Failed to load documents: {exc}")
 
         raise HTTPException(
-            status_code=404,
-            detail="Document not found."
+            status_code=500,
+            detail="Failed to load documents.",
         )
 
-    collection.delete(
-        ids=document_ids
-    )
 
-    file_path = os.path.join(
-        "uploads",
-        filename
-    )
-
-    if os.path.exists(file_path):
-
-        os.remove(file_path)
-
-    processing_status.pop(
-        filename,
-        None
-    )
-
-    return {
-
-        "message": (
-            "Document deleted successfully."
-        ),
-
-        "filename": filename,
-
-        "chunks_deleted": len(
-            document_ids
+@app.get("/documents/{filename}/status")
+def document_status(filename: str):
+    try:
+        results = collection.get(
+            where={"source": filename},
+            include=["metadatas"],
         )
-    }
+
+        metadatas = results.get("metadatas", []) or []
+
+        if metadatas:
+            return {
+                "status": "completed",
+                "filename": filename,
+            }
+
+        upload_path = UPLOAD_DIR / filename
+
+        if upload_path.exists():
+            return {
+                "status": "processing",
+                "filename": filename,
+            }
+
+        return {
+            "status": "not_found",
+            "filename": filename,
+        }
+
+    except Exception as exc:
+        print(
+            f"Failed to check status for {filename}: {exc}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Could not check document status.",
+        )
 
 
-# -----------------------------------
-# PROCESSING STATUS
-# -----------------------------------
+@app.delete("/documents/{filename}")
+def delete_document(filename: str):
+    try:
+        removed = remove_document_from_store(filename)
 
-@app.get(
-    "/documents/{filename}/status"
-)
-def get_processing_status(
-    filename: str
-):
+        file_path = UPLOAD_DIR / filename
 
-    status = processing_status.get(
-        filename
-    )
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception as exc:
+                print(
+                    f"Could not remove uploaded file: {exc}"
+                )
 
-    if status is None:
+        if not removed:
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found.",
+            )
 
-        if collection.get(
-            where={
-                "source": filename
-            },
-            limit=1
-        )["ids"]:
+        return {
+            "status": "success",
+            "filename": filename,
+            "message": "Document deleted successfully.",
+        }
 
-            status = "completed"
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(
+            f"Failed to delete document {filename}: {exc}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete document.",
+        )
+
+
+@app.post("/ask")
+def ask(request: QuestionRequest):
+    question = request.question.strip()
+
+    if not question:
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty.",
+        )
+
+    try:
+        result = ask_question(
+            question=question,
+            source=request.source,
+            conversation_history=request.conversation_history,
+        )
+
+        # rag_pipeline.ask_question returns a dictionary.
+        # Do NOT unpack it as:
+        # answer, sources = result
+        #
+        # because that would return the dictionary keys
+        # ("answer", "sources") instead of their values.
+
+        if isinstance(result, dict):
+            answer = result.get("answer", "")
+            sources = result.get("sources", [])
 
         else:
+            # Compatibility fallback in case the pipeline
+            # returns a tuple.
+            answer, sources = result
 
-            status = "unknown"
+        return {
+            "question": question,
+            "answer": answer,
+            "sources": sources,
+        }
 
-    return {
+    except Exception as exc:
+        print(f"Question processing failed: {exc}")
 
-        "filename": filename,
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process question: {exc}",
+        )
 
-        "status": status
-    }
