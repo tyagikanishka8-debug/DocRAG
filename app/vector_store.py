@@ -1,213 +1,109 @@
 import os
-from datetime import datetime
-
-import cohere
 import chromadb
-
+import cohere
 from dotenv import load_dotenv
 
 from app.document_processor import extract_pages_auto
 from app.chunker import chunk_pages
-from app.text_cleaner import clean_text
-
 
 load_dotenv()
 
+COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 
-cohere_api_key = os.getenv(
-    "COHERE_API_KEY"
-)
+co = cohere.Client(COHERE_API_KEY)
 
-if not cohere_api_key:
-    raise ValueError(
-        "Cohere API key not found!"
-    )
-
-
-co = cohere.ClientV2(
-    api_key=cohere_api_key
-)
-
-
-client = chromadb.PersistentClient(
-    path="chroma_db"
-)
-
+client = chromadb.PersistentClient(path="chroma_db")
 
 collection = client.get_or_create_collection(
     name="documents"
 )
 
 
-def generate_embeddings(texts):
+def embed_texts(texts):
+    """
+    Generate embeddings using Cohere.
+    """
 
-    all_embeddings = []
+    response = co.embed(
+        model="embed-v4.0",
+        texts=texts,
+        input_type="search_document",
+        embedding_types=["float"]
+    )
 
-    batch_size = 90
+    return response.embeddings.float
 
-    for i in range(
-        0,
-        len(texts),
-        batch_size
-    ):
 
-        batch = texts[
-            i:i + batch_size
-        ]
+def embed_query(query):
+    """
+    Generate an embedding for a user question.
+    """
 
-        print(
-            f"Generating embeddings for chunks "
-            f"{i + 1} to "
-            f"{i + len(batch)}..."
-        )
+    response = co.embed(
+        model="embed-v4.0",
+        texts=[query],
+        input_type="search_query",
+        embedding_types=["float"]
+    )
 
-        response = co.embed(
-            model="embed-v4.0",
-            input_type="search_document",
-            texts=batch,
-            embedding_types=["float"]
-        )
-
-        all_embeddings.extend(
-            response.embeddings.float
-        )
-
-    return all_embeddings
+    return response.embeddings.float[0]
 
 
 def document_exists(filename):
+    """
+    Check whether a document already exists in ChromaDB.
+    """
 
     results = collection.get(
-        where={
-            "source": filename
-        },
-        limit=1
+        where={"filename": filename}
     )
 
-    return len(
-        results["ids"]
-    ) > 0
+    return len(results.get("ids", [])) > 0
 
 
-def store_document_chunks(file_path):
-
-    filename = os.path.basename(
-        file_path
-    )
+def store_document_chunks(file_path, filename):
+    """
+    Extract, chunk, embed, and store a PDF or DOCX document.
+    """
 
     if document_exists(filename):
-
-        print(
-            f"Document already exists: "
-            f"{filename}"
-        )
-
         return {
-            "status": "exists",
-            "filename": filename,
-            "chunks_added": 0
+            "status": "duplicate",
+            "filename": filename
         }
 
+    pages = extract_pages_auto(file_path)
 
-    pages = extract_pages_auto(
-        file_path
-    )
-
-    print(
-        "Pages extracted:",
-        len(pages)
-    )
-
-
-    cleaned_pages = []
-
-    for page in pages:
-
-        cleaned_text = clean_text(
-            page["text"]
-        )
-
-        if cleaned_text:
-
-            cleaned_pages.append({
-                "text": cleaned_text,
-                "page": page["page"]
-            })
-
-
-    print(
-        "Pages with text:",
-        len(cleaned_pages)
-    )
-
-
-    chunks = chunk_pages(
-        cleaned_pages
-    )
-
-
-    print(
-        "Total chunks created:",
-        len(chunks)
-    )
-
+    chunks = chunk_pages(pages)
 
     if not chunks:
-
-        raise ValueError(
-            "No readable text found in the document."
-        )
-
+        return {
+            "status": "error",
+            "message": "No readable text found in the document."
+        }
 
     texts = [
         chunk["text"]
         for chunk in chunks
     ]
 
+    embeddings = embed_texts(texts)
 
-    print(
-        "Generating embeddings..."
-    )
+    ids = []
 
+    metadatas = []
 
-    embeddings = generate_embeddings(
-        texts
-    )
+    for index, chunk in enumerate(chunks):
 
-
-    safe_filename = filename.replace(
-        " ",
-        "_"
-    )
-
-
-    ids = [
-
-        f"{safe_filename}_chunk_{i}"
-
-        for i in range(
-            len(chunks)
+        ids.append(
+            f"{filename}_{index}"
         )
-    ]
-    uploaded_at = datetime.now().strftime(
-    "%Y-%m-%d %H:%M:%S"
-    )
 
-    metadatas = [
-
-        {
-            "source": filename,
-            "page": chunk["page"],
-            "file_type":
-                os.path.splitext(
-                    filename
-                )[1].lower(),
-                "uploaded_at": uploaded_at
-        }
-
-        for chunk in chunks
-    ]
-
+        metadatas.append({
+            "filename": filename,
+            "page": chunk.get("page", 0),
+            "file_type": os.path.splitext(filename)[1].lower()
+        })
 
     collection.add(
         ids=ids,
@@ -216,36 +112,75 @@ def store_document_chunks(file_path):
         metadatas=metadatas
     )
 
-
-    print(
-        "Chunks successfully stored "
-        "in ChromaDB!"
-    )
-
-
-    print(
-        "Total documents in collection:",
-        collection.count()
-    )
-
-
     return {
-
-        "status": "uploaded",
-
+        "status": "success",
         "filename": filename,
-
-        "chunks_added":
-            len(chunks)
+        "pages": len(pages),
+        "chunks": len(chunks)
     }
 
 
-# Keep the old function name working
-# in case another part of the project
-# still uses it.
+def store_pdf_chunks(file_path, filename=None):
+    """
+    Backward-compatible wrapper for PDF uploads.
+    """
 
-def store_pdf_chunks(file_path):
+    if filename is None:
+        filename = os.path.basename(file_path)
 
     return store_document_chunks(
-        file_path
+        file_path,
+        filename
     )
+
+
+def search_similar(
+    query,
+    source="all",
+    n_results=5
+):
+    """
+    Search ChromaDB for the most relevant document chunks.
+    """
+
+    query_embedding = embed_query(query)
+
+    if source and source != "all":
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where={"filename": source}
+        )
+
+    else:
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results
+        )
+
+    return results
+
+
+def delete_document(filename):
+    """
+    Delete all chunks belonging to a document.
+    """
+
+    results = collection.get(
+        where={"filename": filename}
+    )
+
+    ids = results.get("ids", [])
+
+    if ids:
+        collection.delete(
+            ids=ids
+        )
+
+    return {
+        "status": "deleted",
+        "filename": filename,
+        "deleted_chunks": len(ids)
+    }
