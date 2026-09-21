@@ -1,73 +1,18 @@
 import os
-
 import cohere
-import chromadb
-
 from dotenv import load_dotenv
-
-
-# -----------------------------------
-# LOAD ENVIRONMENT
-# -----------------------------------
+from app.vector_store import search_similar
 
 load_dotenv()
 
-cohere_api_key = os.getenv(
-    "COHERE_API_KEY"
-)
-
-if not cohere_api_key:
-    raise ValueError(
-        "Cohere API key not found!"
-    )
+co = cohere.Client(os.getenv("COHERE_API_KEY"))
 
 
-# -----------------------------------
-# COHERE
-# -----------------------------------
-
-co = cohere.ClientV2(
-    api_key=cohere_api_key
-)
-
-
-# -----------------------------------
-# CHROMADB
-# -----------------------------------
-
-client = chromadb.PersistentClient(
-    path="chroma_db"
-)
-
-collection = client.get_or_create_collection(
-    name="documents"
-)
-
-
-# -----------------------------------
-# QUERY EMBEDDING
-# -----------------------------------
-
-def generate_query_embedding(question):
-
-    response = co.embed(
-        model="embed-v4.0",
-        input_type="search_query",
-        texts=[question],
-        embedding_types=["float"]
-    )
-
-    return response.embeddings.float[0]
-
-
-# -----------------------------------
-# REWRITE FOLLOW-UP QUESTION
-# -----------------------------------
-
-def rewrite_question(
-    question,
-    conversation_history
-):
+def rewrite_question(question, conversation_history=None):
+    """
+    Rewrite a follow-up question into a standalone question
+    using the previous conversation when needed.
+    """
 
     if not conversation_history:
         return question
@@ -75,91 +20,53 @@ def rewrite_question(
     history_text = ""
 
     for message in conversation_history[-6:]:
-
-        role = message.get(
-            "role",
-            "user"
-        )
-
-        content = message.get(
-            "content",
-            ""
-        )
-
-        if content.strip():
-
-            history_text += (
-                f"{role.upper()}: "
-                f"{content}\n"
-            )
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        history_text += f"{role}: {content}\n"
 
     prompt = f"""
-You are a question rewriting assistant
-for a document question-answering system.
+Rewrite the user's latest question as a standalone question.
 
-Your task is to rewrite the user's latest
-question into a standalone question.
-
-Use the conversation history to resolve
-references such as:
-
+Use the conversation history only to resolve references such as:
 - it
-- its
-- they
-- them
 - this
 - that
-- these
-- those
+- they
 - the above
 - the previous topic
 
-STRICT RULES:
-
-1. Preserve the user's original meaning.
-2. Do not answer the question.
-3. Do not add information that is not
-   present in the conversation.
-4. If the question is already standalone,
-   return it unchanged.
-5. Return ONLY the rewritten question.
-6. Do not add explanations.
+Do not add information that is not present in the conversation.
 
 Conversation history:
 {history_text}
 
-Latest user question:
+Latest question:
 {question}
 
-Standalone question:
+Return only the rewritten standalone question.
 """
 
-    response = co.chat(
-        model="command-a-03-2025",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
+    try:
+        response = co.chat(
+            model="command-a-03-2025",
+            message=prompt
+        )
 
-    rewritten_question = (
-        response
-        .message
-        .content[0]
-        .text
-        .strip()
-    )
+        rewritten = response.text.strip()
 
-    return rewritten_question
+        if rewritten:
+            return rewritten
 
+    except Exception:
+        pass
 
-# -----------------------------------
-# CONFIDENCE CALCULATION
-# -----------------------------------
+    return question
+
 
 def get_confidence(relevance):
+    """
+    Convert relevance score into a simple confidence label.
+    """
 
     if relevance >= 80:
         return "High"
@@ -170,295 +77,183 @@ def get_confidence(relevance):
     return "Low"
 
 
-# -----------------------------------
-# RETRIEVE CHUNKS
-# -----------------------------------
-
-def retrieve_chunks(
-    question,
-    source=None,
-    top_k=5,
-    distance_threshold=1.1
-):
-
-    query_embedding = generate_query_embedding(
-        question
-    )
-
-    if source:
-
-        results = collection.query(
-            query_embeddings=[
-                query_embedding
-            ],
-            n_results=top_k,
-            where={
-                "source": source
-            },
-            include=[
-                "documents",
-                "metadatas",
-                "distances"
-            ]
-        )
-
-    else:
-
-        results = collection.query(
-            query_embeddings=[
-                query_embedding
-            ],
-            n_results=top_k,
-            include=[
-                "documents",
-                "metadatas",
-                "distances"
-            ]
-        )
-
-    if (
-        not results["documents"]
-        or not results["documents"][0]
-    ):
-
-        return [], [], []
-
-    documents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    distances = results["distances"][0]
-
-    filtered_documents = []
-    filtered_metadatas = []
-    filtered_distances = []
-
-    for (
-        document,
-        metadata,
-        distance
-    ) in zip(
-        documents,
-        metadatas,
-        distances
-    ):
-
-        if distance <= distance_threshold:
-
-            filtered_documents.append(
-                document
-            )
-
-            metadata = metadata.copy()
-
-            metadata["distance"] = round(
-                float(distance),
-                4
-            )
-
-            relevance = max(
-                0,
-                min(
-                    100,
-                    (1 - distance) * 100
-                )
-            )
-
-            relevance = round(
-                relevance,
-                1
-            )
-
-            metadata["relevance"] = relevance
-
-            metadata["confidence"] = (
-                get_confidence(
-                    relevance
-                )
-            )
-
-            snippet = document.strip()
-
-            if len(snippet) > 300:
-
-                snippet = (
-                    snippet[:300]
-                    + "..."
-                )
-
-            metadata["snippet"] = snippet
-
-            filtered_metadatas.append(
-                metadata
-            )
-
-            filtered_distances.append(
-                distance
-            )
-
-    return (
-        filtered_documents,
-        filtered_metadatas,
-        filtered_distances
-    )
-
-
-# -----------------------------------
-# GENERATE ANSWER
-# -----------------------------------
-
-def generate_answer(
-    question,
-    documents,
-    conversation_history=None
-):
-
-    # -----------------------------------
-    # NO RELEVANT INFORMATION
-    # -----------------------------------
-
-    if not documents:
-
-        return (
-            "I couldn't find enough information "
-            "in the selected document to answer that."
-        )
-
-    context = "\n\n".join(
-        documents
-    )
-
-    conversation_text = ""
-
-    if conversation_history:
-
-        for message in conversation_history[-6:]:
-
-            role = message.get(
-                "role",
-                "user"
-            )
-
-            content = message.get(
-                "content",
-                ""
-            )
-
-            if content.strip():
-
-                conversation_text += (
-                    f"{role.upper()}: "
-                    f"{content}\n"
-                )
-
-    prompt = f"""
-You are DocRAG, an AI assistant that answers
-questions using ONLY the provided document
-context.
-
-Your job is to give accurate, grounded answers.
-
-STRICT RULES:
-
-1. Use ONLY the provided document context
-   to answer the current question.
-
-2. Do NOT use outside knowledge, general
-   knowledge, assumptions, or guesses.
-
-3. Do NOT invent facts, names, dates,
-   numbers, explanations, or examples.
-
-4. Conversation history may ONLY be used
-   to understand references such as "it",
-   "they", "this", or "the previous topic".
-
-5. The conversation history is NOT a source
-   of factual information. Facts must come
-   from the document context.
-
-6. If the document context does not contain
-   enough information to answer the question,
-   respond EXACTLY with:
-
-"I couldn't find enough information in the selected document to answer that."
-
-7. If only part of the question can be
-   answered from the document, answer only
-   the supported part and clearly state that
-   the remaining information was not found.
-
-8. Never pretend that missing information
-   exists in the document.
-
-9. Keep answers clear, direct, and concise.
-
-10. Do not mention embeddings, vector
-    databases, retrieval, prompts, or the
-    internal DocRAG system.
-
-Conversation history:
-{conversation_text}
-
-Document context:
-{context}
-
-Current question:
-{question}
-
-Answer:
-"""
-
-    response = co.chat(
-        model="command-a-03-2025",
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    answer = (
-        response
-        .message
-        .content[0]
-        .text
-        .strip()
-    )
-
-    return answer
-
-
-# -----------------------------------
-# ASK QUESTION
-# -----------------------------------
-
 def ask_question(
     question,
-    source=None,
+    source="all",
     conversation_history=None
 ):
+    """
+    Complete RAG pipeline:
 
-    if conversation_history is None:
-        conversation_history = []
+    1. Rewrite follow-up question
+    2. Retrieve relevant chunks
+    3. Filter extremely weak results
+    4. Generate grounded answer
+    5. Return answer + sources
+    """
 
     standalone_question = rewrite_question(
         question,
         conversation_history
     )
 
-    (
-        documents,
-        metadatas,
-        distances
-    ) = retrieve_chunks(
+    # Retrieve more candidates so production retrieval
+    # has enough context to work with.
+    results = search_similar(
         standalone_question,
-        source=source
+        source=source,
+        n_results=5
     )
 
-    answer = generate_answer(
-        standalone_question,
-        documents,
-        conversation_history
-    )
+    if not results:
+        return {
+            "answer": "I couldn't find enough information in the selected document to answer that.",
+            "sources": []
+        }
 
-    return answer, metadatas
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    if not documents:
+        return {
+            "answer": "I couldn't find enough information in the selected document to answer that.",
+            "sources": []
+        }
+
+    # Keep reasonably relevant chunks.
+    # ChromaDB cosine distance: lower = more similar.
+    filtered = []
+
+    for i, document in enumerate(documents):
+
+        distance = distances[i] if i < len(distances) else 1.0
+
+        # More forgiving production threshold.
+        if distance <= 1.5:
+            filtered.append({
+                "document": document,
+                "metadata": metadatas[i] if i < len(metadatas) else {},
+                "distance": distance
+            })
+
+    # If the threshold removed everything, keep the best
+    # retrieved result instead of throwing away all context.
+    if not filtered:
+        best_index = 0
+
+        best_distance = (
+            distances[0]
+            if distances
+            else 1.0
+        )
+
+        for i, distance in enumerate(distances):
+            if distance < best_distance:
+                best_distance = distance
+                best_index = i
+
+        filtered.append({
+            "document": documents[best_index],
+            "metadata": (
+                metadatas[best_index]
+                if best_index < len(metadatas)
+                else {}
+            ),
+            "distance": best_distance
+        })
+
+    context_parts = []
+    sources = []
+
+    for item in filtered:
+
+        document = item["document"]
+        metadata = item["metadata"]
+        distance = item["distance"]
+
+        # Convert ChromaDB distance into a simple relevance score.
+        relevance = max(
+            0,
+            min(
+                100,
+                round((1 - distance / 1.5) * 100, 1)
+            )
+        )
+
+        confidence = get_confidence(relevance)
+
+        context_parts.append(document)
+
+        snippet = document[:300]
+
+        sources.append({
+            "filename": metadata.get("filename", "Unknown"),
+            "page": metadata.get("page", "Unknown"),
+            "relevance": relevance,
+            "confidence": confidence,
+            "snippet": snippet
+        })
+
+    context = "\n\n---\n\n".join(context_parts)
+
+    history_text = ""
+
+    if conversation_history:
+        for message in conversation_history[-6:]:
+            role = message.get("role", "user")
+            content = message.get("content", "")
+            history_text += f"{role}: {content}\n"
+
+    prompt = f"""
+You are DocRAG, a document question-answering assistant.
+
+Answer the user's question using ONLY the information contained
+in the provided document context.
+
+Rules:
+
+1. Do not use outside knowledge.
+2. Do not guess or invent facts.
+3. If the document does not contain enough information,
+   say exactly:
+   "I couldn't find enough information in the selected document to answer that."
+4. You may combine information from multiple retrieved sections
+   when they support the answer.
+5. If only part of the question is supported, answer only that part
+   and clearly state that the remaining information was not found.
+6. Conversation history may be used only to understand references
+   in the user's question. It must NOT be used as a source of facts.
+7. Give a clear and concise answer.
+8. Do not mention the retrieval process unless necessary.
+
+Conversation history:
+{history_text}
+
+Document context:
+{context}
+
+User question:
+{question}
+
+Answer:
+"""
+
+    try:
+        response = co.chat(
+            model="command-a-03-2025",
+            message=prompt
+        )
+
+        answer = response.text.strip()
+
+    except Exception:
+        answer = (
+            "I couldn't generate an answer right now. "
+            "Please try again."
+        )
+
+    return {
+        "answer": answer,
+        "sources": sources
+    }
