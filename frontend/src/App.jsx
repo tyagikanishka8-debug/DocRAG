@@ -1,3 +1,4 @@
+
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
@@ -194,6 +195,29 @@ function App() {
     }
   };
 
+  // Makes sure sources are always stored as an array.
+  const normalizeSources = (sources) => {
+    if (!sources) {
+      return [];
+    }
+
+    if (Array.isArray(sources)) {
+      return sources;
+    }
+
+    // If backend returns { sources: [...] }
+    if (Array.isArray(sources.sources)) {
+      return sources.sources;
+    }
+
+    // If backend returns one source object
+    if (typeof sources === "object") {
+      return [sources];
+    }
+
+    return [];
+  };
+
   const askQuestion = async () => {
     const trimmedQuestion = question.trim();
 
@@ -242,7 +266,7 @@ function App() {
       const assistantMessage = {
         role: "assistant",
         content: data.answer || "No answer returned.",
-        sources: data.sources || [],
+        sources: normalizeSources(data.sources),
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -550,7 +574,8 @@ function App() {
                     </div>
 
                     {message.role === "assistant" &&
-                      message.sources?.length > 0 && (
+                      Array.isArray(message.sources) &&
+                      message.sources.length > 0 && (
                         <div className="sources">
                           <div className="sources-title">
                             <span>◈</span>
@@ -707,3 +732,4 @@ function App() {
 }
 
 export default App;
+
