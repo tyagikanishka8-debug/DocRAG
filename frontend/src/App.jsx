@@ -1,984 +1,707 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = "https://docrag-api.onrender.com";
 
 function App() {
   const [documents, setDocuments] = useState([]);
-  const [activeDocument, setActiveDocument] = useState(null);
-
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [activeDocument, setActiveDocument] = useState("");
   const [question, setQuestion] = useState("");
-
   const [messages, setMessages] = useState([]);
-
   const [uploading, setUploading] = useState(false);
-  const [asking, setAsking] = useState(false);
   const [processing, setProcessing] = useState(false);
-
+  const [processingFile, setProcessingFile] = useState("");
   const [error, setError] = useState("");
-  const [uploadMessage, setUploadMessage] = useState("");
+  const [loadingAnswer, setLoadingAnswer] = useState(false);
 
-  const chatEndRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetchDocuments();
   }, []);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-    });
-  }, [messages, asking]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loadingAnswer]);
 
-  async function fetchDocuments() {
+  const fetchDocuments = async () => {
     try {
-      const response = await fetch(
-        `${API_URL}/documents`
-      );
+      const response = await fetch(`${API_URL}/documents`);
 
       if (!response.ok) {
-        throw new Error(
-          "Failed to load documents."
-        );
+        throw new Error("Failed to load documents");
       }
 
       const data = await response.json();
-
       setDocuments(data.documents || []);
 
-      if (
-        !activeDocument &&
-        data.documents &&
-        data.documents.length > 0
-      ) {
-        setActiveDocument(
-          data.documents[0].filename
-        );
+      if (!activeDocument && data.documents?.length > 0) {
+        setActiveDocument(data.documents[0].filename);
       }
     } catch (err) {
       console.error(err);
+      setError("Could not load documents.");
     }
-  }
+  };
 
-  async function checkProcessingStatus(
-    filename
-  ) {
-    try {
-      const response = await fetch(
-        `${API_URL}/documents/${encodeURIComponent(
-          filename
-        )}/status`
-      );
+  const handleUpload = async (event) => {
+    const file = event.target.files?.[0];
 
-      if (!response.ok) {
-        return null;
-      }
+    if (!file) return;
 
-      const data = await response.json();
+    const allowedTypes = [".pdf", ".docx"];
+    const extension = file.name
+      .substring(file.name.lastIndexOf("."))
+      .toLowerCase();
 
-      return data.status;
-    } catch (err) {
-      console.error(
-        "Status check failed:",
-        err
-      );
-
-      return null;
-    }
-  }
-
-  async function waitForProcessing(
-    filename
-  ) {
-    setProcessing(true);
-
-    for (
-      let attempt = 0;
-      attempt < 120;
-      attempt++
-    ) {
-      const status =
-        await checkProcessingStatus(
-          filename
-        );
-
-      if (status === "completed") {
-        setProcessing(false);
-
-        setUploadMessage(
-          "✓ Document is ready! You can start asking questions."
-        );
-
-        await fetchDocuments();
-
-        setActiveDocument(filename);
-
-        return;
-      }
-
-      if (status === "failed") {
-        setProcessing(false);
-
-        setError(
-          "Document processing failed. Please try uploading the file again."
-        );
-
-        return;
-      }
-
-      await new Promise(
-        (resolve) =>
-          setTimeout(resolve, 2000)
-      );
-    }
-
-    setProcessing(false);
-
-    setError(
-      "Document processing is taking longer than expected. Please check again in a moment."
-    );
-  }
-
-  async function handleUpload() {
-    if (!selectedFile) {
-      setError(
-        "Please select a PDF or DOCX file first."
-      );
+    if (!allowedTypes.includes(extension)) {
+      setError("Please upload a PDF or DOCX file.");
       return;
     }
 
     setUploading(true);
-    setError("");
-    setUploadMessage("");
     setProcessing(false);
+    setProcessingFile(file.name);
+    setError("");
 
     const formData = new FormData();
-
-    formData.append(
-      "file",
-      selectedFile
-    );
+    formData.append("file", file);
 
     try {
-      const response = await fetch(
-        `${API_URL}/upload`,
-        {
-          method: "POST",
-          body: formData,
-        }
-      );
+      const response = await fetch(`${API_URL}/upload`, {
+        method: "POST",
+        body: formData,
+      });
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Upload failed."
-        );
+        throw new Error(data.detail || "Upload failed");
       }
 
-      if (data.status === "exists") {
-        setUploadMessage(
-          "This document is already uploaded."
-        );
-
-        await fetchDocuments();
-
-        setActiveDocument(
-          data.filename
-        );
-
-        setSelectedFile(null);
-
-        return;
-      }
-
-      setUploadMessage(
-        "File uploaded! DocRAG is processing your document in the background..."
-      );
-
-      setSelectedFile(null);
-
-      await waitForProcessing(
-        data.filename
-      );
-    } catch (err) {
-      setError(
-        err.message ||
-          "Something went wrong while uploading."
-      );
-    } finally {
       setUploading(false);
-    }
-  }
+      setProcessing(true);
 
-  async function handleDeleteDocument(
-    filename
-  ) {
+      await fetchDocuments();
+
+      pollProcessingStatus(file.name);
+    } catch (err) {
+      console.error(err);
+      setUploading(false);
+      setProcessing(false);
+      setError(err.message || "Upload failed.");
+    }
+
+    event.target.value = "";
+  };
+
+  const pollProcessingStatus = async (filename) => {
+    let attempts = 0;
+    const maxAttempts = 120;
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(
+          `${API_URL}/documents/${encodeURIComponent(filename)}/status`
+        );
+
+        if (!response.ok) {
+          throw new Error("Could not check processing status");
+        }
+
+        const data = await response.json();
+
+        if (data.status === "completed") {
+          setProcessing(false);
+          setProcessingFile("");
+          setActiveDocument(filename);
+          await fetchDocuments();
+          return;
+        }
+
+        if (data.status === "failed") {
+          setProcessing(false);
+          setProcessingFile("");
+          setError(data.error || "Document processing failed.");
+          await fetchDocuments();
+          return;
+        }
+
+        attempts += 1;
+
+        if (attempts < maxAttempts) {
+          setTimeout(checkStatus, 1500);
+        } else {
+          setProcessing(false);
+          setProcessingFile("");
+          setError("Processing is taking longer than expected.");
+        }
+      } catch (err) {
+        console.error(err);
+        attempts += 1;
+
+        if (attempts < maxAttempts) {
+          setTimeout(checkStatus, 1500);
+        } else {
+          setProcessing(false);
+          setProcessingFile("");
+          setError("Could not check document processing status.");
+        }
+      }
+    };
+
+    checkStatus();
+  };
+
+  const selectDocument = (filename) => {
+    setActiveDocument(filename);
+    setMessages([]);
+    setQuestion("");
+    setError("");
+  };
+
+  const deleteDocument = async (filename) => {
     const confirmed = window.confirm(
-      `Delete "${filename}"? This will remove the document and its indexed data.`
+      `Delete "${filename}" from DocRAG?`
     );
 
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     try {
-      setError("");
-      setUploadMessage("");
-
       const response = await fetch(
-        `${API_URL}/documents/${encodeURIComponent(
-          filename
-        )}`,
+        `${API_URL}/documents/${encodeURIComponent(filename)}`,
         {
           method: "DELETE",
         }
       );
 
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Failed to delete document."
-        );
+        throw new Error(data.detail || "Failed to delete document");
       }
 
-      setDocuments((prev) =>
-        prev.filter(
-          (document) =>
-            document.filename !== filename
-        )
-      );
-
-      if (
-        activeDocument === filename
-      ) {
-        setActiveDocument(null);
+      if (activeDocument === filename) {
+        setActiveDocument("");
         setMessages([]);
       }
 
-      setUploadMessage(
-        `✓ ${filename} deleted successfully.`
-      );
+      await fetchDocuments();
     } catch (err) {
-      setError(
-        err.message ||
-          "Something went wrong while deleting the document."
-      );
+      console.error(err);
+      setError(err.message || "Could not delete document.");
     }
-  }
+  };
 
-  async function handleAsk() {
-    if (!question.trim()) {
-      return;
-    }
+  const askQuestion = async () => {
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion || loadingAnswer) return;
 
     if (!activeDocument) {
-      setError(
-        "Please upload or select a document first."
-      );
+      setError("Please select a document first.");
       return;
     }
 
-    const currentQuestion =
-      question.trim();
-
-    setQuestion("");
     setError("");
-    setAsking(true);
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: currentQuestion,
-      },
-    ]);
+    const userMessage = {
+      role: "user",
+      content: trimmedQuestion,
+    };
+
+    const conversationHistory = messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+
+    setMessages((prev) => [...prev, userMessage]);
+    setQuestion("");
+    setLoadingAnswer(true);
 
     try {
-      const response = await fetch(
-        `${API_URL}/ask`,
-        {
-          method: "POST",
+      const response = await fetch(`${API_URL}/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: trimmedQuestion,
+          source: activeDocument,
+          conversation_history: conversationHistory,
+        }),
+      });
 
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body: JSON.stringify({
-            question:
-              currentQuestion,
-
-            source:
-              activeDocument,
-
-            conversation_history:
-              messages.map(
-                (message) => ({
-                  role:
-                    message.role,
-
-                  content:
-                    message.content,
-                })
-              ),
-          }),
-        }
-      );
-
-      const data =
-        await response.json();
+      const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(
-          data.detail ||
-            "Failed to get an answer."
-        );
+        throw new Error(data.detail || "Failed to get answer");
       }
+
+      const assistantMessage = {
+        role: "assistant",
+        content: data.answer || "No answer returned.",
+        sources: data.sources || [],
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+    } catch (err) {
+      console.error(err);
 
       setMessages((prev) => [
         ...prev,
-
         {
           role: "assistant",
-          content: data.answer,
-          sources:
-            data.sources || [],
+          content:
+            "Sorry, I couldn't process your question right now.",
+          sources: [],
         },
       ]);
 
-    } catch (err) {
-
-      setError(
-        err.message ||
-          "Something went wrong while asking the question."
-      );
-
+      setError(err.message || "Something went wrong.");
     } finally {
-
-      setAsking(false);
+      setLoadingAnswer(false);
     }
-  }
+  };
 
-  function handleKeyDown(event) {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey
-    ) {
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-
-      if (
-        !asking &&
-        !processing
-      ) {
-        handleAsk();
-      }
+      askQuestion();
     }
-  }
+  };
 
-  function selectDocument(filename) {
-    setActiveDocument(filename);
+  const clearChat = () => {
     setMessages([]);
+    setQuestion("");
     setError("");
-    setUploadMessage("");
-  }
+  };
 
-  function clearChat() {
-    setMessages([]);
-    setError("");
-  }
+  const formatFileSize = (bytes) => {
+    if (!bytes) return "";
+
+    const units = ["B", "KB", "MB", "GB"];
+    let size = bytes;
+    let index = 0;
+
+    while (size >= 1024 && index < units.length - 1) {
+      size /= 1024;
+      index += 1;
+    }
+
+    return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+  };
 
   return (
     <div className="app">
-
       <header className="header">
-
         <div className="header-content">
+          <div className="brand-area">
+            <div className="brand-icon">✦</div>
 
-          <div>
-
-            <h1>
-              DocRAG
-            </h1>
-
-            <p>
-              AI-powered document
-              question answering
-            </p>
-
+            <div>
+              <h1>DocRAG</h1>
+              <p>AI-powered document intelligence</p>
+            </div>
           </div>
 
           <div
             className={`header-badge ${
-              processing
-                ? "processing"
-                : activeDocument
-                ? "ready"
-                : ""
+              activeDocument ? "ready" : ""
             }`}
           >
-
-            {processing
-              ? "⏳ Processing..."
-              : activeDocument
-              ? "✓ Document Ready"
-              : "AI Document Assistant"}
-
+            <span className="status-dot"></span>
+            {activeDocument ? "Document Ready" : "AI Document Assistant"}
           </div>
-
         </div>
-
       </header>
 
-
       <main className="main-container">
-
-        <section className="upload-section">
-
-          <div className="upload-card">
+        <section className="hero-section">
+          <div>
+            <span className="hero-label">SMART DOCUMENT Q&A</span>
 
             <h2>
-              Upload a document
+              Ask your documents.
+              <span> Get answers.</span>
             </h2>
 
             <p>
-              Upload a PDF or DOCX and ask
-              questions about its content.
+              Upload your PDFs or DOCX files and let DocRAG
+              find the information you need.
             </p>
-
-            <div className="upload-row">
-
-              <input
-                type="file"
-
-                accept=".pdf,.docx"
-
-                disabled={
-                  uploading ||
-                  processing
-                }
-
-                onChange={(event) => {
-
-                  setSelectedFile(
-                    event.target.files?.[0] ||
-                      null
-                  );
-
-                  setError("");
-                  setUploadMessage("");
-
-                }}
-              />
-
-              <button
-                onClick={handleUpload}
-
-                disabled={
-                  !selectedFile ||
-                  uploading ||
-                  processing
-                }
-              >
-
-                {uploading
-                  ? "Uploading..."
-                  : "Upload Document"}
-
-              </button>
-
-            </div>
-
-            {uploadMessage && (
-              <div className="upload-message">
-                {uploadMessage}
-              </div>
-            )}
-
-            {error && (
-              <div className="error-message">
-                {error}
-              </div>
-            )}
-
           </div>
 
+          <div className="hero-decoration">
+            <div className="floating-card card-one">PDF</div>
+            <div className="floating-card card-two">AI</div>
+            <div className="floating-card card-three">Q&A</div>
+          </div>
         </section>
 
+        <section className="upload-card">
+          <div className="upload-icon">↑</div>
 
-        {processing && (
-
-          <div className="processing-message">
-
-            <div className="processing-spinner">
-              ⟳
-            </div>
-
-            <div>
-
-              <strong>
-                Processing your document...
-              </strong>
-
-              <p>
-                DocRAG is extracting,
-                chunking, embedding, and
-                indexing your document.
-                This may take a moment.
-              </p>
-
-            </div>
-
+          <div className="upload-content">
+            <h3>Upload a document</h3>
+            <p>PDF and DOCX supported</p>
           </div>
 
+          <button
+            className="upload-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading || processing}
+          >
+            {uploading ? "Uploading..." : "Choose File"}
+          </button>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx"
+            onChange={handleUpload}
+            hidden
+          />
+        </section>
+
+        {processing && (
+          <div className="processing-message">
+            <div className="processing-spinner"></div>
+
+            <div>
+              <strong>Processing your document</strong>
+              <p>
+                {processingFile || "Your document"} is being
+                analyzed in the background...
+              </p>
+            </div>
+          </div>
         )}
 
+        {error && (
+          <div className="error-message">
+            <span>!</span>
+            <p>{error}</p>
+
+            <button onClick={() => setError("")}>×</button>
+          </div>
+        )}
 
         <section className="workspace">
-
           <aside className="sidebar">
-
             <div className="sidebar-header">
+              <div>
+                <span className="section-label">YOUR LIBRARY</span>
+                <h3>Documents</h3>
+              </div>
 
-              <h2>
-                Documents
-              </h2>
-
-              <span>
+              <span className="document-count">
                 {documents.length}
               </span>
-
             </div>
 
-
             {documents.length === 0 ? (
-
-              <p className="empty-documents">
-                No documents uploaded yet.
-              </p>
-
+              <div className="empty-documents">
+                <div className="empty-icon">📄</div>
+                <p>No documents yet</p>
+                <span>Upload a file to get started.</span>
+              </div>
             ) : (
-
               <div className="document-list">
+                {documents.map((document) => {
+                  const isActive =
+                    activeDocument === document.filename;
 
-                {documents.map(
-                  (document) => (
-
+                  return (
                     <div
-                      key={
-                        document.filename
-                      }
-
+                      key={document.filename}
                       className={`document-item ${
-                        activeDocument ===
-                        document.filename
-                          ? "active"
-                          : ""
+                        isActive ? "active" : ""
                       }`}
+                      onClick={() =>
+                        selectDocument(document.filename)
+                      }
                     >
+                      <div className="document-icon">
+                        {document.filename
+                          .toLowerCase()
+                          .endsWith(".docx")
+                          ? "W"
+                          : "P"}
+                      </div>
 
-                      <button
-                        className="document-select"
+                      <div className="document-info">
+                        <strong title={document.filename}>
+                          {document.filename}
+                        </strong>
 
-                        onClick={() =>
-                          selectDocument(
-                            document.filename
-                          )
-                        }
-
-                        disabled={
-                          processing
-                        }
-                      >
-
-                        <span className="document-icon">
-
-                          {document.file_type ===
-                          ".docx"
-                            ? "📝"
-                            : "📄"}
-
-                        </span>
-
-
-                        <span className="document-details">
-
-                          <span className="document-name">
-                            {
-                              document.filename
-                            }
-                          </span>
-
-                          <span className="document-meta">
-
-                            {document.file_type
-                              ?.replace(
-                                ".",
-                                ""
-                              )
-                              .toUpperCase() ||
-                              "FILE"}
-
-                            {" • "}
-
-                            {document.pages ??
-                              0}
-
-                            {" pages • "}
-
-                            {document.chunks ??
-                              0}
-
-                            {" chunks"}
-
-                          </span>
-
-                        </span>
-
-                      </button>
-
+                        <div className="document-meta">
+                          {document.pages || 0} pages
+                          {document.chunks
+                            ? ` • ${document.chunks} chunks`
+                            : ""}
+                        </div>
+                      </div>
 
                       <button
                         className="delete-button"
-
-                        onClick={() =>
-                          handleDeleteDocument(
-                            document.filename
-                          )
-                        }
-
-                        disabled={
-                          processing
-                        }
-
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteDocument(document.filename);
+                        }}
                         title="Delete document"
                       >
-                        🗑️
+                        ×
                       </button>
-
                     </div>
-                  )
-                )}
-
+                  );
+                })}
               </div>
-
             )}
 
+            <div className="sidebar-tip">
+              <span>✦</span>
+              <div>
+                <strong>Pro tip</strong>
+                <p>
+                  Ask specific questions for more accurate
+                  answers.
+                </p>
+              </div>
+            </div>
           </aside>
 
-
           <section className="chat-section">
-
             <div className="chat-header">
-
               <div>
+                <span className="section-label">AI ASSISTANT</span>
 
-                <h2>
-                  Ask your document
-                </h2>
-
-                <p>
-
+                <h3>
                   {activeDocument
-                    ? `Currently reading: ${activeDocument}`
-                    : "Select a document to begin"}
-
-                </p>
-
+                    ? "Chat with your document"
+                    : "Select a document"}
+                </h3>
               </div>
 
-
               {messages.length > 0 && (
-
                 <button
                   className="clear-button"
-
                   onClick={clearChat}
-
-                  disabled={
-                    asking ||
-                    processing
-                  }
                 >
                   Clear Chat
                 </button>
-
               )}
-
             </div>
 
+            <div className="messages">
+              {messages.length === 0 && (
+                <div className="welcome-message">
+                  <div className="welcome-icon">✦</div>
 
-            <div className="chat-container">
-
-              {messages.length === 0 ? (
-
-                <div className="empty-chat">
-
-                  <div className="empty-icon">
-                    💬
-                  </div>
-
-                  <h3>
-                    Ask anything about
-                    your document
-                  </h3>
+                  <h2>What would you like to know?</h2>
 
                   <p>
-                    DocRAG will find the
-                    relevant information
-                    and generate an answer
-                    using your document.
+                    {activeDocument
+                      ? `Ask anything about ${activeDocument}.`
+                      : "Choose a document from your library to start asking questions."}
                   </p>
 
-                </div>
-
-              ) : (
-
-                <div className="messages">
-
-                  {messages.map(
-                    (message, index) => (
-
-                      <div
-                        key={index}
-
-                        className={`message ${
-                          message.role
-                        }`}
+                  {activeDocument && (
+                    <div className="suggestion-row">
+                      <button
+                        onClick={() =>
+                          setQuestion("What is this document about?")
+                        }
                       >
+                        What is this document about?
+                      </button>
 
-                        <div className="message-label">
-
-                          {message.role ===
-                          "user"
-                            ? "You"
-                            : "DocRAG"}
-
-                        </div>
-
-
-                        <div className="message-content">
-
-                          {
-                            message.content
-                          }
-
-                        </div>
-
-
-                        {message.sources &&
-                          message.sources
-                            .length > 0 && (
-
-                            <div className="sources">
-
-                              <div className="sources-title">
-                                Sources
-                              </div>
-
-                              <div className="sources-explanation">
-                                Relevance shows how closely the retrieved text matches your question. Confidence is DocRAG's estimated confidence in the retrieved information.
-                              </div>
-
-
-                              {message.sources.map(
-                                (
-                                  source,
-                                  sourceIndex
-                                ) => (
-
-                                  <div
-                                    key={
-                                      sourceIndex
-                                    }
-
-                                    className="source-item"
-                                  >
-
-                                    <div className="source-info">
-
-                                      <span>
-                                        📄
-                                      </span>
-
-                                      <span>
-
-                                        {
-                                          source.source
-                                        }
-
-                                        {" • Page "}
-
-                                        {
-                                          source.page
-                                        }
-
-                                      </span>
-
-                                    </div>
-
-
-                                    <div className="source-meta">
-
-                                      {source.relevance !==
-                                        undefined && (
-
-                                        <span className="relevance-badge">
-
-                                          {
-                                            source.relevance
-                                          }
-
-                                          % relevant
-
-                                        </span>
-
-                                      )}
-
-
-                                      {source.confidence && (
-
-                                        <span
-                                          className={`confidence-badge confidence-${source.confidence.toLowerCase()}`}
-                                        >
-                                          {source.confidence} confidence
-                                        </span>
-
-                                      )}
-
-                                    </div>
-
-
-                                    {source.snippet && (
-
-                                      <div className="source-snippet">
-
-                                        <span className="snippet-label">
-                                          Retrieved text
-                                        </span>
-
-                                        <p>
-                                          "{source.snippet}"
-                                        </p>
-
-                                      </div>
-
-                                    )}
-
-                                  </div>
-
-                                )
-                              )}
-
-                            </div>
-
-                          )}
-
-                      </div>
-                    )
-                  )}
-
-
-                  {asking && (
-
-                    <div className="message assistant">
-
-                      <div className="message-label">
-                        DocRAG
-                      </div>
-
-                      <div className="thinking">
-
-                        <span></span>
-                        <span></span>
-                        <span></span>
-
-                      </div>
-
+                      <button
+                        onClick={() =>
+                          setQuestion("Summarize the main points.")
+                        }
+                      >
+                        Summarize the main points
+                      </button>
                     </div>
-
                   )}
-
-
-                  <div
-                    ref={chatEndRef}
-                  />
-
                 </div>
-
               )}
 
-            </div>
+              {messages.map((message, index) => (
+                <div
+                  key={index}
+                  className={`message ${message.role}`}
+                >
+                  <div className="message-avatar">
+                    {message.role === "user" ? "You" : "✦"}
+                  </div>
 
+                  <div className="message-body">
+                    <div className="message-label">
+                      {message.role === "user"
+                        ? "You"
+                        : "DocRAG"}
+                    </div>
+
+                    <div className="message-content">
+                      {message.content}
+                    </div>
+
+                    {message.role === "assistant" &&
+                      message.sources?.length > 0 && (
+                        <div className="sources">
+                          <div className="sources-title">
+                            <span>◈</span>
+                            Sources
+                          </div>
+
+                          <p className="sources-explanation">
+                            Relevance shows how closely the
+                            retrieved text matches your
+                            question. Confidence is DocRAG's
+                            estimated confidence in the
+                            retrieved information.
+                          </p>
+
+                          <div className="source-list">
+                            {message.sources.map(
+                              (source, sourceIndex) => (
+                                <div
+                                  className="source-item"
+                                  key={sourceIndex}
+                                >
+                                  <div className="source-top">
+                                    <div className="source-info">
+                                      <strong>
+                                        {source.filename ||
+                                          source.source ||
+                                          "Document"}
+                                      </strong>
+
+                                      {source.page && (
+                                        <span>
+                                          Page {source.page}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {source.confidence && (
+                                      <span
+                                        className={`confidence-badge confidence-${String(
+                                          source.confidence
+                                        ).toLowerCase()}`}
+                                      >
+                                        {source.confidence}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {source.relevance !==
+                                    undefined && (
+                                    <div className="relevance">
+                                      <span>
+                                        Relevance
+                                      </span>
+
+                                      <strong>
+                                        {Number(
+                                          source.relevance
+                                        ).toFixed(1)}
+                                        %
+                                      </strong>
+                                    </div>
+                                  )}
+
+                                  {source.snippet && (
+                                    <div className="source-snippet">
+                                      <span className="snippet-label">
+                                        Retrieved text
+                                      </span>
+
+                                      <p>
+                                        {source.snippet}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            )}
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                </div>
+              ))}
+
+              {loadingAnswer && (
+                <div className="message assistant">
+                  <div className="message-avatar">✦</div>
+
+                  <div className="message-body">
+                    <div className="message-label">
+                      DocRAG
+                    </div>
+
+                    <div className="thinking">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div ref={messagesEndRef}></div>
+            </div>
 
             <div className="question-area">
+              <div className="question-box">
+                <textarea
+                  value={question}
+                  onChange={(event) =>
+                    setQuestion(event.target.value)
+                  }
+                  onKeyDown={handleKeyDown}
+                  placeholder={
+                    activeDocument
+                      ? "Ask a question about your document..."
+                      : "Select a document first..."
+                  }
+                  disabled={!activeDocument || loadingAnswer}
+                  rows={1}
+                />
 
-              <textarea
+                <button
+                  className="send-button"
+                  onClick={askQuestion}
+                  disabled={
+                    !activeDocument ||
+                    !question.trim() ||
+                    loadingAnswer
+                  }
+                  title="Ask question"
+                >
+                  ↑
+                </button>
+              </div>
 
-                value={question}
-
-                onChange={(event) =>
-                  setQuestion(
-                    event.target.value
-                  )
-                }
-
-                onKeyDown={
-                  handleKeyDown
-                }
-
-                placeholder={
-                  processing
-                    ? "Please wait while your document is being processed..."
-                    : activeDocument
-                    ? "Ask a question about your document..."
-                    : "Upload a document first..."
-                }
-
-                disabled={
-                  !activeDocument ||
-                  asking ||
-                  processing
-                }
-
-                rows={2}
-
-              />
-
-
-              <button
-
-                onClick={handleAsk}
-
-                disabled={
-                  !question.trim() ||
-                  !activeDocument ||
-                  asking ||
-                  processing
-                }
-
-              >
-
-                {asking
-                  ? "Thinking..."
-                  : "Ask"}
-
-              </button>
-
+              <div className="input-hint">
+                <span>Enter to send</span>
+                <span>•</span>
+                <span>Answers are grounded in your document</span>
+              </div>
             </div>
-
           </section>
-
         </section>
-
       </main>
 
+      <footer>
+        <span>DocRAG</span>
+        <span>•</span>
+        <span>AI-powered document Q&A</span>
+      </footer>
     </div>
   );
 }
