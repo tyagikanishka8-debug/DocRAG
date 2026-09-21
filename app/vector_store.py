@@ -20,10 +20,6 @@ collection = client.get_or_create_collection(
 
 
 def embed_texts(texts):
-    """
-    Generate embeddings using Cohere.
-    """
-
     response = co.embed(
         model="embed-v4.0",
         texts=texts,
@@ -35,10 +31,6 @@ def embed_texts(texts):
 
 
 def embed_query(query):
-    """
-    Generate an embedding for a user question.
-    """
-
     response = co.embed(
         model="embed-v4.0",
         texts=[query],
@@ -50,10 +42,6 @@ def embed_query(query):
 
 
 def document_exists(filename):
-    """
-    Check whether a document already exists in ChromaDB.
-    """
-
     results = collection.get(
         where={"filename": filename}
     )
@@ -61,10 +49,16 @@ def document_exists(filename):
     return len(results.get("ids", [])) > 0
 
 
-def store_document_chunks(file_path, filename):
+def store_document_chunks(file_path, filename=None):
     """
-    Extract, chunk, embed, and store a PDF or DOCX document.
+    Extract, chunk, embed and store a document.
+
+    filename is optional so both the old and new
+    calling styles remain compatible.
     """
+
+    if filename is None:
+        filename = os.path.basename(file_path)
 
     if document_exists(filename):
         return {
@@ -90,7 +84,6 @@ def store_document_chunks(file_path, filename):
     embeddings = embed_texts(texts)
 
     ids = []
-
     metadatas = []
 
     for index, chunk in enumerate(chunks):
@@ -121,13 +114,6 @@ def store_document_chunks(file_path, filename):
 
 
 def store_pdf_chunks(file_path, filename=None):
-    """
-    Backward-compatible wrapper for PDF uploads.
-    """
-
-    if filename is None:
-        filename = os.path.basename(file_path)
-
     return store_document_chunks(
         file_path,
         filename
@@ -139,22 +125,15 @@ def search_similar(
     source="all",
     n_results=5
 ):
-    """
-    Search ChromaDB for the most relevant document chunks.
-    """
-
     query_embedding = embed_query(query)
 
     if source and source != "all":
-
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
             where={"filename": source}
         )
-
     else:
-
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results
@@ -164,10 +143,6 @@ def search_similar(
 
 
 def delete_document(filename):
-    """
-    Delete all chunks belonging to a document.
-    """
-
     results = collection.get(
         where={"filename": filename}
     )
@@ -175,9 +150,7 @@ def delete_document(filename):
     ids = results.get("ids", [])
 
     if ids:
-        collection.delete(
-            ids=ids
-        )
+        collection.delete(ids=ids)
 
     return {
         "status": "deleted",
