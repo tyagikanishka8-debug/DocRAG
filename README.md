@@ -1,84 +1,171 @@
-# DocRAG — AI Document Q&A System
+# DocRAG – LLM-Powered Document Q&A System
 
-DocRAG is an AI-powered document question-answering system that allows users to upload documents and ask natural-language questions about their content.
+DocRAG is a full-stack Retrieval-Augmented Generation (RAG) application that allows users to upload documents and ask questions about their content.
 
-It uses Retrieval-Augmented Generation (RAG) to retrieve relevant information from uploaded documents before generating grounded answers.
+The system processes PDF, DOCX, and scanned documents, extracts and cleans their text, creates semantic embeddings, retrieves relevant document chunks, and generates context-grounded responses using an LLM.
+
+## 🚀 Live Demo
+
+**Frontend:**  
+https://docrag-frontend-9ncj.onrender.com
+
+**Backend API:**  
+https://docrag-api.onrender.com
+
+---
+
+## 📌 Project Overview
+
+DocRAG is designed to make document-based information retrieval easier by allowing users to interact with their documents using natural language.
+
+Instead of manually searching through lengthy documents, users can upload their files and ask questions. DocRAG retrieves the most relevant sections of the uploaded documents and uses them as context to generate grounded responses.
+
+---
 
 ## ✨ Features
 
 - Upload PDF and DOCX documents
-- Automatic PDF text extraction
-- OCR support for scanned PDFs
-- Text cleaning and intelligent chunking
-- Semantic search using embeddings
-- Persistent vector storage with ChromaDB
-- AI-powered answers using Cohere
-- Multi-document support
-- Document-specific question answering
-- Source citations with page numbers
-- Retrieved text snippets
-- Relevance scores
-- Confidence indicators
-- Conversation-aware follow-up questions
-- Background document processing
-- Document library with metadata
+- Process scanned documents using OCR
+- Extract and clean document text
+- Automatically divide documents into smaller chunks
+- Generate semantic embeddings using Cohere
+- Store embeddings using ChromaDB
+- Perform semantic similarity search
+- Ask natural-language questions about documents
+- Retrieve information from multiple documents
+- Conversation-aware question answering
+- Document and page-level source citations
+- Source relevance tracking
+- Document library
+- Duplicate document detection
 - Delete uploaded documents
-- React-based frontend
+- Background document processing
+- Processing status tracking
+- React-based user interface
 - FastAPI backend
 
-## 🏗️ Architecture
+---
+
+## 🏗️ System Architecture
 
 ```text
-React Frontend
-       ↓
-    FastAPI
-       ↓
- Document Upload
-       ↓
- PDF / DOCX / OCR
-       ↓
- Text Cleaning
-       ↓
- Intelligent Chunking
-       ↓
- Cohere Embeddings
-       ↓
-    ChromaDB
-       ↓
- Semantic Retrieval
-       ↓
- Relevant Document Chunks
-       ↓
- Cohere LLM
-       ↓
- Grounded Answer + Sources
-```
+                ┌──────────────────────┐
+                │    React Frontend    │
+                └──────────┬───────────┘
+                           │
+                           ▼
+                ┌──────────────────────┐
+                │     FastAPI API      │
+                └──────────┬───────────┘
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+              ▼                         ▼
+      Document Processing          Question Processing
+              │                         │
+              ▼                         ▼
+       PDF / DOCX / OCR          Query Embedding
+              │                         │
+              ▼                         ▼
+       Text Cleaning              ChromaDB Search
+              │                         │
+              ▼                         ▼
+          Chunking              Relevant Chunks
+              │                         │
+              └────────────┬────────────┘
+                           ▼
+                  ┌─────────────────┐
+                  │   Cohere LLM    │
+                  └────────┬────────┘
+                           │
+                           ▼
+                  Grounded Response
+                    + Sources
+## 🔄 How DocRAG Works
+
+### 1. Document Upload
+
+The user uploads a PDF or DOCX document through the React frontend.
+
+### 2. Document Processing
+
+The FastAPI backend receives the document and extracts its content.
+
+- PDF files are processed using PyMuPDF
+- DOCX files are processed using python-docx
+- Scanned documents are processed using Tesseract OCR
+
+### 3. Text Cleaning
+
+The extracted text is cleaned and normalized before further processing.
+
+### 4. Text Chunking
+
+Large documents are divided into smaller chunks so that relevant sections can be retrieved efficiently.
+
+### 5. Embedding Generation
+
+Cohere embeddings are generated for the document chunks.
+
+### 6. Vector Storage
+
+The embeddings and document metadata are stored in ChromaDB.
+
+### 7. Question Processing
+
+When the user asks a question, the question is converted into an embedding.
+
+### 8. Semantic Retrieval
+
+ChromaDB searches for relevant document chunks based on semantic similarity.
+
+### 9. Response Generation
+
+The retrieved chunks are provided as context to the Cohere language model, which generates a response based on the available document content.
+
+### 10. Source Citations
+
+DocRAG returns relevant source information, including document and page-level references where available.
+
+---
 
 ## 🛠️ Tech Stack
+
+### Frontend
+
+- React
+- JavaScript
+- HTML
+- CSS
 
 ### Backend
 
 - Python
 - FastAPI
-- Cohere API
+
+### AI / RAG
+
+- Cohere
 - ChromaDB
+- Retrieval-Augmented Generation (RAG)
+
+### Document Processing
+
 - PyMuPDF
 - python-docx
 - Tesseract OCR
 
-### Frontend
-
-- React
-- Vite
-- JavaScript
-- CSS
-
-### Other
+### Development Tools
 
 - Git
 - GitHub
-- REST API
-- Retrieval-Augmented Generation (RAG)
+- VS Code
+
+### Deployment
+
+- Render
+
+---
 
 ## 📂 Project Structure
 
@@ -86,167 +173,166 @@ React Frontend
 DocRAG/
 │
 ├── app/
-│   ├── chunker.py
-│   ├── document_processor.py
 │   ├── main.py
-│   ├── rag_pipeline.py
-│   ├── vector_store.py
+│   ├── document_processor.py
 │   └── ...
 │
 ├── frontend/
-│   ├── src/
-│   ├── public/
-│   ├── package.json
-│   └── vite.config.js
+│   └── ...
 │
+├── uploads/
+│
+├── requirements.txt
 ├── .gitignore
 ├── README.md
-└── requirements.txt
+└── ...
 ```
 
-## ⚙️ Setup
+---
 
-### 1. Clone the repository
+## ⚙️ Installation and Setup
+
+### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/tyagikanishka8-debug/DocRAG.git
 cd DocRAG
 ```
 
-### 2. Create a virtual environment
+### 2. Create a Virtual Environment
 
 ```bash
 python -m venv venv
 ```
 
-### 3. Activate the virtual environment
+### 3. Activate the Virtual Environment
 
-Windows:
+For Windows:
 
-```powershell
+```bash
 venv\Scripts\activate
 ```
 
-### 4. Install Python dependencies
+### 4. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Configure the Cohere API key
+### 5. Configure Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root and add your Cohere API key:
 
-```env
+```text
 COHERE_API_KEY=your_cohere_api_key
 ```
 
-Do not commit the `.env` file.
+Do not commit your API key or `.env` file to GitHub.
 
-## ▶️ Run the Backend
+### 6. Start the Backend
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The backend will run at:
+The backend will run locally at:
 
 ```text
-http://localhost:8000
+http://127.0.0.1:8000
 ```
 
-API documentation is available at:
+### 7. Start the Frontend
 
-```text
-http://localhost:8000/docs
-```
+Open a new terminal and navigate to the frontend directory.
 
-## ▶️ Run the Frontend
-
-Open another terminal:
+Install dependencies:
 
 ```bash
-cd frontend
 npm install
+```
+
+Start the development server:
+
+```bash
 npm run dev
 ```
 
-Then open the local URL shown by Vite, usually:
+---
+
+## 🔐 Environment Variables
+
+DocRAG requires API credentials for the Cohere API.
+
+Example:
 
 ```text
-http://localhost:5173
+COHERE_API_KEY=your_api_key
 ```
 
-## 💡 How RAG Works
+API keys should never be uploaded to GitHub.
 
-1. Upload a document.
-2. Extract text from PDF or DOCX.
-3. Use OCR for scanned PDF pages when required.
-4. Clean the extracted text.
-5. Split the text into meaningful chunks.
-6. Generate embeddings for the chunks.
-7. Store embeddings in ChromaDB.
-8. Convert the user's question into an embedding.
-9. Retrieve relevant document chunks.
-10. Send the retrieved context to the Cohere language model.
-11. Generate a grounded answer.
-12. Display the answer with source pages and snippets.
+The `.env` file should be excluded using `.gitignore`.
 
-## 🔒 Grounded Answers
+---
 
-DocRAG is designed to answer questions using the retrieved document context rather than unsupported information.
+## 📚 Key Concepts Demonstrated
 
-If sufficient information cannot be found in the selected document, it responds:
+This project demonstrates practical implementation of:
 
-> I couldn't find enough information in the selected document to answer that.
+- Retrieval-Augmented Generation
+- Large Language Models
+- Semantic Search
+- Vector Databases
+- Text Embeddings
+- Natural Language Processing
+- Optical Character Recognition
+- REST APIs
+- Full-Stack Development
+- Document Processing
+- Asynchronous Processing
+- Metadata Management
 
-## 🔄 Conversation-Aware Questions
+---
 
-DocRAG supports follow-up questions by using previous conversation context to understand references such as:
+## 🎯 Learning Outcomes
 
-- "What about this?"
-- "What does it mean?"
-- "How is it different?"
-- "Tell me more about that."
+Through this project, the following concepts were implemented and explored:
 
-The system rewrites follow-up questions into standalone questions before retrieving relevant document content.
+- Building an end-to-end RAG pipeline
+- Working with LLM APIs
+- Generating and storing embeddings
+- Implementing semantic retrieval
+- Processing different document formats
+- Integrating OCR into a document pipeline
+- Building APIs using FastAPI
+- Developing a React frontend
+- Connecting frontend and backend systems
+- Managing source citations and metadata
+- Using Git and GitHub for version control
+- Deploying a full-stack application
 
-## 📄 Document Management
-
-DocRAG provides a document library that allows users to:
-
-- View uploaded documents
-- See file type and metadata
-- See page and chunk counts
-- Switch between documents
-- Delete documents
-- Prevent duplicate document uploads
-
-## 🔍 Source Grounding
-
-Each generated answer can include:
-
-- Source document
-- Page number
-- Retrieved text snippet
-- Relevance score
-- Confidence indicator
-
-This helps users understand where the answer came from.
-
-## 🚀 Future Improvements
-
-- Streaming AI responses
-- Authentication and user accounts
-- Cloud deployment
-- More document formats
-- Improved OCR processing
-- Conversation persistence
-- Advanced document analytics
-- Production database integration
+---
 
 ## 👩‍💻 Author
 
 **Kanishka Tyagi**
 
-B.Tech Computer Science & Engineering
+B.Tech – Computer Science and Engineering
+
+JECRC University
+
+**GitHub:**
+
+https://github.com/tyagikanishka8-debug
+
+**LinkedIn:**
+
+https://www.linkedin.com/in/kanishkatyagi14
+
+---
+
+## 📄 Project Status
+
+**Status:** Completed
+
+DocRAG was developed as a full-stack academic project demonstrating the practical implementation of Retrieval-Augmented Generation, document processing, semantic search, and LLM-based question answering.
