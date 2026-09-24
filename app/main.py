@@ -1,4 +1,3 @@
-
 import os
 import shutil
 from pathlib import Path
@@ -8,7 +7,6 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from app.document_processor import process_document
 from app.rag_pipeline import ask_question
 from app.vector_store import (
     collection,
@@ -58,42 +56,37 @@ def process_uploaded_document(file_path: str, filename: str):
     try:
         print(f"Starting background processing: {file_path}")
 
-        result = process_document(file_path)
-
-        if isinstance(result, dict):
-            status = result.get("status")
-            pages = result.get("pages", 0)
-            chunks = result.get("chunks", 0)
-
-            if status == "error":
-                print(f"Background processing failed: {result}")
-                return result
-
-        else:
-            pages = 0
-            chunks = 0
-
         store_result = store_document_chunks(
             file_path,
             filename=filename,
         )
+
+        if not isinstance(store_result, dict):
+            return {
+                "status": "failed",
+                "filename": filename,
+                "error": "Document processing returned an invalid result.",
+            }
+
+        if store_result.get("status") == "exists":
+            print(f"Document already exists: {filename}")
+            return store_result
 
         print(
             "Background processing completed:",
             {
                 "status": "success",
                 "filename": filename,
-                "pages": pages,
-                "chunks": chunks,
+                "pages": store_result.get("pages", 0),
+                "chunks": store_result.get("chunks", 0),
             },
         )
 
         return {
             "status": "success",
             "filename": filename,
-            "pages": pages,
-            "chunks": chunks,
-            "store_result": store_result,
+            "pages": store_result.get("pages", 0),
+            "chunks": store_result.get("chunks", 0),
         }
 
     except Exception as exc:
@@ -367,4 +360,3 @@ def ask(request: QuestionRequest):
             status_code=500,
             detail=f"Failed to process question: {exc}",
         )
-
